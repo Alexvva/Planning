@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Planning Pro</title>
+  <title>Shiftly</title>
   <style>
     :root{
       --bg:#0f172a;--card:#020617;--text:#e5e7eb;--muted:#94a3b8;--accent:#2563eb;
@@ -67,7 +67,7 @@
 </head>
 <body>
 <header>
-  <h1 id="appTitle">Planning Pro</h1>
+  <h1 id="appTitle">Shiftly</h1>
   <small>Tableau de bord</small>
 </header>
 
@@ -102,7 +102,7 @@
     const profile=s.profile||{};
     const title=(profile.firstName||profile.lastName)
       ? `${profile.firstName||''} ${profile.lastName||''}`.trim()
-      : (s.appName||'Planning Pro');
+      : (s.appName||'Shiftly');
     document.getElementById('appTitle').innerText=title;
     document.body.classList.toggle('light', s.theme==='light');
   }
