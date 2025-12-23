@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Shiftly</title>
 
-  <!-- Supabase client -->
-<script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <!-- Supabase UMD: expose window.supabase -->
+  <script defer src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 
   <style>
     :root{
@@ -94,37 +94,30 @@
 
 <script>
   // =========================
-  // SUPABASE CONFIG (UNE SEULE DECLARATION)
+  // SUPABASE CONFIG
   // =========================
   const SUPABASE_URL = "https://uwxwcmouominwzfqucxj.supabase.com";
   const SUPABASE_ANON_KEY = "sb_publishable_9gj_xTjHYg4uUvOm8oIgSw_Dju5VK2w";
 
-  
-  // Client Supabase (nom unique)
-window.supabaseClient = window.supabaseClient.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  // IMPORTANT: on n'utilise JAMAIS une variable appelée "supabase"
+  window.supabaseClient = null;
 
-function supabaseReady(){
-  return !!window.supabaseClient;
-}
+  function supabaseReady(){
+    return !!window.supabaseClient;
+  }
 
+  // Initialisation sûre (ne plante jamais l'app)
+  try{
+    if (window.supabase?.createClient) {
+      window.supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    }
+  } catch (e) {
+    window.supabaseClient = null;
+  }
 
-  // IMPORTANT: une seule déclaration de supabase dans tout le fichier
-  let supabaseClient = null;
   let cloudUser = null;
   let cloudSaveTimer = null;
   let lastCloudPayloadHash = "";
-
-  function supabaseReady(){
-    return !!supabaseClient;
-  }
-
-  try{
-    if(window.supabase?.createClient){
-      supabaseClient = window.supabaseClient.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    }
-  }catch(e){
-    supabase = null;
-  }
 
   // Keys
   const K={clients:'clients',shifts:'shifts',billing:'billing',settings:'settings'};
@@ -137,6 +130,9 @@ function supabaseReady(){
   // ==========
   // CLOUD BACKUP
   // ==========
+  function getBilling(){ return JSON.parse(localStorage.getItem(K.billing)||'[]'); }
+  function setBilling(arr){ localStorage.setItem(K.billing, JSON.stringify(arr)); }
+
   function buildPayload(){
     return {
       version: 1,
@@ -168,7 +164,7 @@ function supabaseReady(){
       const h = hashPayload(payload);
       if(h === lastCloudPayloadHash) return;
 
-      const { error } = await supabase
+      const { error } = await window.supabaseClient
         .from("user_backups")
         .upsert({ user_id: cloudUser.id, payload, updated_at: new Date().toISOString() });
 
@@ -181,7 +177,7 @@ function supabaseReady(){
   async function cloudRestoreIfAny(){
     if(!supabaseReady() || !cloudUser) return;
 
-    const { data, error } = await supabase
+    const { data, error } = await window.supabaseClient
       .from("user_backups")
       .select("payload")
       .eq("user_id", cloudUser.id)
@@ -202,8 +198,7 @@ function supabaseReady(){
 
   async function refreshAuthAndSync(){
     if(!supabaseReady()) return;
-
-    const { data } = await supabaseClient.auth.getUser();
+    const { data } = await window.supabaseClient.auth.getUser();
     cloudUser = data?.user || null;
     if(cloudUser){
       await cloudRestoreIfAny();
@@ -254,6 +249,10 @@ function supabaseReady(){
   }
 
   /* HOME */
+  function monthTotal(month){
+    return getBilling().filter(x=>x.month===month).reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+  }
+
   function showHome(){
     const clients=get(K.clients);
     const shifts=get(K.shifts);
@@ -705,10 +704,7 @@ function supabaseReady(){
   /* BILLING */
   const billingState={ mode:'monthly', month:'', year:'' };
 
-  function getBilling(){ return JSON.parse(localStorage.getItem(K.billing)||'[]'); }
-  function setBilling(arr){ localStorage.setItem(K.billing, JSON.stringify(arr)); }
   function billingForMonth(month){ return getBilling().filter(x=>x.month===month); }
-  function monthTotal(month){ return billingForMonth(month).reduce((s,x)=>s+(parseFloat(x.amount)||0),0); }
   function listMonths(){
     const months=[...new Set(getBilling().map(x=>x.month))].filter(Boolean);
     months.sort((a,b)=>a<b?1:-1);
@@ -999,6 +995,41 @@ function supabaseReady(){
   }
 
   /* SETTINGS */
+  function saveSetting(k,v){
+    const s=JSON.parse(localStorage.getItem(K.settings)||'{}');
+    s[k]=v;
+    localStorage.setItem(K.settings,JSON.stringify(s));
+    scheduleCloudSave();
+    applySettings();
+  }
+
+  function openResetModal(){
+    const modal=document.createElement('div');
+    modal.className='modal';
+    modal.onclick=e=>{ if(e.target===modal) modal.remove(); };
+    modal.innerHTML=`
+      <div class="modal-content">
+        <div class="modal-header">
+          <button class="close-modal" onclick="this.closest('.modal').remove()">✕</button>
+          <h3>Réinitialiser ?</h3>
+        </div>
+        <p><small>Cette action supprime Clients, Planning et Facturation.</small></p>
+        <button class="resetDanger" id="confirmReset">Supprimer tout</button>
+        <button class="ghost" style="margin-top:10px" onclick="this.closest('.modal').remove()">Annuler</button>
+      </div>`;
+    document.body.appendChild(modal);
+
+    modal.querySelector('#confirmReset').addEventListener('click',()=>{
+      localStorage.removeItem(K.clients);
+      localStorage.removeItem(K.shifts);
+      localStorage.removeItem(K.billing);
+      scheduleCloudSave();
+      modal.remove();
+      showHome();
+      openInfoModal('Réinitialisé','Les données ont été supprimées.');
+    });
+  }
+
   function showSettings(){
     const s=JSON.parse(localStorage.getItem(K.settings)||'{}');
     const p=s.profile||{};
@@ -1047,36 +1078,6 @@ function supabaseReady(){
       </div>
 
       <div class="card">
-        <strong>Réglages</strong><br/>
-        <small>Options classiques</small>
-
-        <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px" class="row">
-          <div><small>Début de semaine</small></div>
-          <select id="setWeekStart" style="max-width:180px;margin:0">
-            <option value="monday">Lundi</option>
-            <option value="sunday">Dimanche</option>
-          </select>
-        </div>
-
-        <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px" class="row">
-          <div><small>Format horaire</small></div>
-          <select id="setTimeFmt" style="max-width:180px;margin:0">
-            <option value="24">24h</option>
-            <option value="12">12h</option>
-          </select>
-        </div>
-
-        <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px" class="row">
-          <div><small>Devise</small></div>
-          <select id="setCurrency" style="max-width:180px;margin:0">
-            <option value="EUR">EUR (€)</option>
-            <option value="USD">USD ($)</option>
-            <option value="GBP">GBP (£)</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="card">
         <strong>Données</strong><br/>
         <small>Export / import / remise à zéro</small>
 
@@ -1091,17 +1092,16 @@ function supabaseReady(){
       </div>
     `;
 
-    // --- AUTH UI ---
     const authStatus = document.getElementById('authStatus');
 
-    // Si Supabase n'est pas prêt, on n'attache pas d'events (sinon plantage)
+    // AUTH (pas de "supabase non chargé": on montre l'état réel)
     if(!supabaseReady()){
-      authStatus.textContent = 'Cloud non disponible (Supabase non chargé)';
+      authStatus.textContent = "Cloud indisponible (lib Supabase non chargée)";
       document.getElementById('loginBtn').disabled = true;
       document.getElementById('logoutBtn').disabled = true;
     } else {
       async function refreshAuthStatus(){
-        const { data } = await supabaseClient.auth.getUser();
+        const { data } = await window.supabaseClient.auth.getUser();
         cloudUser = data?.user || null;
         authStatus.textContent = cloudUser ? `Connecté : ${cloudUser.email}` : 'Non connecté';
         if(cloudUser){
@@ -1113,29 +1113,25 @@ function supabaseReady(){
       document.getElementById('loginBtn').addEventListener('click', async ()=>{
         const email = document.getElementById('authEmail').value.trim();
         if(!email) return;
-        const { error } = await supabaseClient.auth.signInWithOtp({ email });
-        if(error) openInfoModal('Erreur', 'Connexion impossible. Vérifie Supabase Auth + URL.');
+        const { error } = await window.supabaseClient.auth.signInWithOtp({ email });
+        if(error) openInfoModal('Erreur', 'Connexion impossible (vérifie Auth + URL Supabase).');
         else openInfoModal('Email envoyé', 'Ouvre le lien reçu pour te connecter.');
       });
 
       document.getElementById('logoutBtn').addEventListener('click', async ()=>{
-        await supabaseClient.auth.signOut();
+        await window.supabaseClient.auth.signOut();
         cloudUser = null;
         authStatus.textContent = 'Non connecté';
       });
 
-      supabaseClient.auth.onAuthStateChange(async ()=>{
+      window.supabaseClient.auth.onAuthStateChange(async ()=>{
         await refreshAuthStatus();
       });
 
       refreshAuthStatus();
     }
 
-    // --- SETTINGS UI ---
-    document.getElementById('setWeekStart').value=s.weekStart||'monday';
-    document.getElementById('setTimeFmt').value=s.timeFormat||'24';
-    document.getElementById('setCurrency').value=s.currency||'EUR';
-
+    // Profil
     document.getElementById('saveProfileBtn').addEventListener('click',()=>{
       const st=JSON.parse(localStorage.getItem(K.settings)||'{}');
       st.profile={
@@ -1155,10 +1151,6 @@ function supabaseReady(){
 
     document.getElementById('setDarkBtn').addEventListener('click',()=>saveSetting('theme','dark'));
     document.getElementById('setLightBtn').addEventListener('click',()=>saveSetting('theme','light'));
-
-    document.getElementById('setWeekStart').addEventListener('change',(e)=>saveSetting('weekStart',e.target.value));
-    document.getElementById('setTimeFmt').addEventListener('change',(e)=>saveSetting('timeFormat',e.target.value));
-    document.getElementById('setCurrency').addEventListener('change',(e)=>saveSetting('currency',e.target.value));
 
     // Export
     document.getElementById('exportBtn').addEventListener('click',()=>{
@@ -1209,46 +1201,11 @@ function supabaseReady(){
     ensureFab(null);
   }
 
-  function saveSetting(k,v){
-    const s=JSON.parse(localStorage.getItem(K.settings)||'{}');
-    s[k]=v;
-    localStorage.setItem(K.settings,JSON.stringify(s));
-    scheduleCloudSave();
-    applySettings();
-  }
-
-  function openResetModal(){
-    const modal=document.createElement('div');
-    modal.className='modal';
-    modal.onclick=e=>{ if(e.target===modal) modal.remove(); };
-    modal.innerHTML=`
-      <div class="modal-content">
-        <div class="modal-header">
-          <button class="close-modal" onclick="this.closest('.modal').remove()">✕</button>
-          <h3>Réinitialiser ?</h3>
-        </div>
-        <p><small>Cette action supprime Clients, Planning et Facturation.</small></p>
-        <button class="resetDanger" id="confirmReset">Supprimer tout</button>
-        <button class="ghost" style="margin-top:10px" onclick="this.closest('.modal').remove()">Annuler</button>
-      </div>`;
-    document.body.appendChild(modal);
-
-    modal.querySelector('#confirmReset').addEventListener('click',()=>{
-      localStorage.removeItem(K.clients);
-      localStorage.removeItem(K.shifts);
-      localStorage.removeItem(K.billing);
-      scheduleCloudSave();
-      modal.remove();
-      showHome();
-      openInfoModal('Réinitialisé','Les données ont été supprimées.');
-    });
-  }
-
   // Init
   applySettings();
   showHome();
 
-  // Au démarrage : si déjà connecté, restore auto
+  // Restore cloud si déjà connecté
   refreshAuthAndSync();
 </script>
 </body>
